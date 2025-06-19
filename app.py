@@ -38,7 +38,7 @@ def internal_error(error):
 
 @app.errorhandler(413)
 def request_entity_too_large(error):
-    return jsonify({
+    return jsonify({ 
         'error': 'Request Entity Too Large',
         'message': 'The uploaded file is too large.',
         'status_code': 413
@@ -52,13 +52,20 @@ def bad_request(error):
         'status_code': 400
     }), 400
 
-# Load model and data with error handling
+# Load model, scaler, and data with error handling
 try:
     model = joblib.load("model.pkl")
     print("Model loaded successfully")
 except Exception as e:
     print(f"Error loading model: {str(e)}")
     model = None
+
+try:
+    scaler = joblib.load("scaler.pkl")
+    print("Scaler loaded successfully")
+except Exception as e:
+    print(f"Error loading scaler: {str(e)}")
+    scaler = None
 
 try:
     glcm_data = pd.read_csv("glcm_features.csv")
@@ -90,11 +97,13 @@ def home():
 @app.route('/health')
 def health_check():
     model_status = "loaded" if model is not None else "not loaded"
+    scaler_status = "loaded" if scaler is not None else "not loaded"
     data_status = "loaded" if glcm_data is not None else "not loaded"
     
     return jsonify({
         'status': 'healthy',
         'model_status': model_status,
+        'scaler_status': scaler_status,
         'data_status': data_status,
         'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
     })
@@ -224,24 +233,37 @@ def predict():
             
             if input_features is None or len(input_features) != 4:
                 return jsonify({
-                    'error': 'Feature extraction failed',
-                    'message': 'Could not extract GLCM features from the segmented image.',
+                    'error': 'Ekstraksi fitur gagal',
+                    'message': 'Tidak dapat mengekstrak fitur GLCM dari gambar tersegmentasi.',
+                    'status_code': 500
+                }), 500
+            
+            # Scale the input features for KNN
+            if scaler is not None:
+                input_features_scaled = scaler.transform([input_features])[0]
+            else:
+                return jsonify({
+                    'error': 'Scaler tidak tersedia',
+                    'message': 'Scaler untuk normalisasi fitur tidak dimuat.',
                     'status_code': 500
                 }), 500
                 
         except Exception as e:
             return jsonify({
-                'error': 'Feature extraction error',
-                'message': f'Error extracting GLCM features: {str(e)}',
+                'error': 'Kesalahan ekstraksi fitur',
+                'message': f'Kesalahan mengekstrak fitur GLCM: {str(e)}',
                 'status_code': 500
             }), 500
-        
-        # Calculate Euclidean distances with all existing features
+
+        # Calculate Euclidean distances with all existing features (menggunakan scaled features)
         try:
             distances = []
+            # Scale all existing features for comparison
+            existing_features_scaled = scaler.transform(glcm_data[['contrast', 'correlation', 'energy', 'homogeneity']])
+            
             for index, row in glcm_data.iterrows():
-                existing_features = [row['contrast'], row['correlation'], row['energy'], row['homogeneity']]
-                distance = euclidean(input_features, existing_features)
+                existing_features = existing_features_scaled[index]
+                distance = euclidean(input_features_scaled, existing_features)
                 distances.append({
                     'distance': float(distance),
                     'label': row['label'],
@@ -253,20 +275,20 @@ def predict():
             
         except Exception as e:
             return jsonify({
-                'error': 'Distance calculation error',
-                'message': f'Error calculating distances: {str(e)}',
+                'error': 'Kesalahan perhitungan jarak',
+                'message': f'Kesalahan menghitung jarak: {str(e)}',
                 'status_code': 500
             }), 500
-        
-        # Get prediction from the trained model
+
+        # Get prediction from the trained model (menggunakan scaled features)
         try:
-            raw_prediction = model.predict([input_features])[0]
+            raw_prediction = model.predict([input_features_scaled])[0]
             model_prediction = format_prediction_result(raw_prediction)
             
         except Exception as e:
             return jsonify({
-                'error': 'Prediction error',
-                'message': f'Error making prediction: {str(e)}',
+                'error': 'Kesalahan prediksi',
+                'message': f'Kesalahan membuat prediksi: {str(e)}',
                 'status_code': 500
             }), 500
         
